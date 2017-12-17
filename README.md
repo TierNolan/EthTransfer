@@ -9,7 +9,7 @@ The ethernet port on the ENC28J60 is fully under the control of the software.
 Ethernet can be used to transfer files to and from an offline computer without the risk
 of malware exploiting a vulnerability in the network stack of the OS on the Pi.
 
-This still allows malware to exploit vulnerabilities in this software.  
+This still allows malware to exploit vulnerabilities in this software.
 To combat that, this software is kept as simple as possible to allow easy review.
 
 The software includes the following parts
