@@ -86,7 +86,7 @@ int clear_control_register_test() {
 }
 
 int write_buffer_test() {
-	printf("Buffer read/write test:  ");
+	printf("Buffer Read/Write:       ");
 	soft_reset();
 
 	char write_buf[8192];
@@ -120,6 +120,37 @@ int write_buffer_test() {
 	return pass();
 }
 
+int phy_reg_test() {
+	printf("Phy Registers:           ");
+
+	write_phy_reg(PHCON1, 0x4000);
+	int read = read_phy_reg(PHCON1);
+
+	if (read != 0x4000) {
+		return fail("PHCON1 readback failed");
+	}
+
+	write_phy_reg(PHCON2, 0x4000);
+	read = read_phy_reg(PHCON2);
+
+	if (read != 0x4000) {
+		return fail("PHCON2 readback failed");
+	}
+
+	write_phy_reg(PHIE, 0x0012);
+	read = read_phy_reg(PHIE);
+
+	if (read != 0x0012) {
+		return fail("PHIE readback failed");
+	}
+
+	return pass();
+}
+
+int read_phy_reg(int address);
+void write_phy_reg(int address, int data);
+
+
 int main() {
 	if (!init_ethernet_test()) {
 		return -1;
@@ -133,6 +164,7 @@ int main() {
 	pass &= set_control_register_test();
 	pass &= clear_control_register_test();
 	pass &= write_buffer_test();
+	pass &= phy_reg_test();
 
 	printf("\nTests: %s\n", pass ? "PASS" : "FAIL");
 

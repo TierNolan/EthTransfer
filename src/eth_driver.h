@@ -6,4 +6,9 @@
 int init_ethernet();
 int close_ethernet();
 
+int get_packet(char* buffer, int len);
+int queue_packet(char *buffer, int len);
+int poll_tx_send();
+
+
 #endif
