@@ -99,7 +99,7 @@ int write_buffer_test() {
 		write_buf[i] = rand();
 	}
 
-	set_bank(0);
+	push_bank(0);
 
 	for (i = 0; i < 4; i++) {
 		write_control_register(ERDPTL, 0);
@@ -116,6 +116,8 @@ int write_buffer_test() {
 			return fail("Memory block mismatch");
 		}
 	}
+
+	pop_bank();
 
 	return pass();
 }
@@ -147,8 +149,76 @@ int phy_reg_test() {
 	return pass();
 }
 
-int read_phy_reg(int address);
-void write_phy_reg(int address, int data);
+int control_register_word_test() {
+        printf("Control Register Word:   ");
+	push_bank(0);
+        write_control_register_word(ETXSTL, 0x1234);
+        int read = read_control_register_word(ETXSTL);
+        if (read != 0x1234) {
+                return fail("Unable to write/read control register word");
+        }
+
+        write_control_register_word(ETXSTL, 0x1AA5);
+        read = read_control_register(ETXSTL);
+        if (read != 0xA5) {
+                return fail("Unexpected high-byte readback after word write");
+        }
+	read = read_control_register(ETXSTH);
+        if (read != 0x1A) {
+                return fail("Unexpected low-byte readback after word write");
+        }
+
+	write_control_register(ETXSTL, 0x67);
+	write_control_register(ETXSTH, 0x09);
+	read = read_control_register_word(ETXSTL);
+        if (read != 0x0967) {
+                return fail("Unexpected word readback after 2 byte writes");
+        }
+	pop_bank();
+
+        return pass();
+}
+
+int push_bank_test() {
+	printf("Bank Stack Test:         ");
+	push_bank(3);
+	int bank = read_control_register(ECON1) & 0x3;
+	if (bank != 3) {
+		return fail("Failed to update bank with push_bank");
+	}
+	push_bank(2);
+	bank = read_control_register(ECON1) & 0x3;
+        if (bank != 2) {
+                return fail("Failed to update bank with push_bank");
+        }
+	pop_bank();
+	bank = read_control_register(ECON1) & 0x3;
+        if (bank != 3) {
+                return fail("Bank did not restore after first pop_bank");
+        }
+	push_bank(0);
+        bank = read_control_register(ECON1) & 0x3;
+        if (bank != 0) {
+                return fail("Failed to update bank with push_bank");
+        }
+	push_bank(1);
+        bank = read_control_register(ECON1) & 0x3;
+        if (bank != 1) {
+                return fail("Failed to update bank with push_bank");
+        }
+	pop_bank();
+        bank = read_control_register(ECON1) & 0x3;
+        if (bank != 0) {
+                return fail("Bank did not restore after second pop_bank");
+        }
+	pop_bank();
+        bank = read_control_register(ECON1) & 0x3;
+        if (bank != 3) {
+                return fail("Bank did not restore after third pop_bank");
+        }
+	pop_bank();
+	return pass();
+}
 
 
 int main() {
@@ -165,6 +235,8 @@ int main() {
 	pass &= clear_control_register_test();
 	pass &= write_buffer_test();
 	pass &= phy_reg_test();
+	pass &= control_register_word_test();
+	pass &= push_bank_test();
 
 	printf("\nTests: %s\n", pass ? "PASS" : "FAIL");
 

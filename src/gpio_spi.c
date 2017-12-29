@@ -1,10 +1,12 @@
 #include "gpio_spi.h"
+#include "eth_driver_local.h"
 
 // This code is based on code from Dom and Gert
 // https://elinux.org/RPi_GPIO_Code_Samples#Direct_register_access
 
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -16,6 +18,7 @@
 #define GPIO_OFFSET (0x200000)
 
 #define BLOCK_SIZE (4096)
+#define BANK_STACK_SIZE (128)
 
 #define SHORT_WAIT {int wait_delay;  for (wait_delay = 0; wait_delay < 16; wait_delay++) {*(gpio_clr) = 0;}}
 
@@ -73,6 +76,10 @@ int peri_base_table[][2] = {
 	{0xa02082, 0x3F000000},
 	{0xa22082, 0x3F000000}
 };
+
+int bank_stack[BANK_STACK_SIZE];
+int bank_index = 0;
+int current_bank = 0;
 
 void *gpio_mmap = NULL;
 
@@ -176,7 +183,7 @@ void set_control_register(int address, int data) {
 }
 
 
-int buffer_write(char* buf, int off, int len) {
+int buffer_write(uint8_t* buf, int off, int len) {
 	assert_cs();
 	spi_write_byte(0x7A);
 	char *t = buf + off;
@@ -189,7 +196,7 @@ int buffer_write(char* buf, int off, int len) {
 	return len;
 }
 
-int buffer_read(char* buf, int off, int len) {
+int buffer_read(uint8_t* buf, int off, int len) {
 	assert_cs();
 	spi_write_byte(0x3A);
 	char *t = buf + off;
@@ -200,6 +207,79 @@ int buffer_read(char* buf, int off, int len) {
 	}
 	deassert_cs();
 	return len;
+}
+
+void set_read_pointer(int address) {
+        write_control_register_word(ERDPTL, address);
+}
+
+void set_write_pointer(int address) {
+        write_control_register_word(EWRPTL, address);
+}
+
+void set_bank(int bank) {
+        current_bank = bank;
+        clear_control_register(ECON1, ECON1_BSEL);
+        set_control_register(ECON1, bank & ECON1_BSEL);
+}
+
+void push_bank(int bank) {
+	if (bank_index >= BANK_STACK_SIZE) {
+		fprintf(stderr, "Bank stack exhausted\n");
+		fflush(stderr);
+		exit(-1);
+	} 
+	bank_stack[bank_index] = current_bank;
+	bank_index++;
+	set_bank(bank);
+}
+
+void pop_bank() {
+	if (bank_index <= 0) {
+		fprintf(stderr, "Bank stack underflow\n");
+		fflush(stderr);
+		exit(-1);
+	}
+	bank_index--;
+	set_bank(bank_stack[bank_index]);
+}
+
+void write_control_register_word(int address, int data) {
+        write_control_register(address, data);
+        write_control_register(address + 1, data >> 8);
+}
+
+int read_control_register_word(int address) {
+        return ((read_control_register(address + 1) & 0xFF) << 8) | (read_control_register(address) & 0xFF);
+}
+
+void wait_busy() {
+        usleep(12);
+        push_bank(3);
+        while (read_control_register(MISTAT) & MISTAT_BUSY) {
+                usleep(1);
+        }
+        pop_bank();
+}
+
+int read_phy_reg(int address) {
+        push_bank(2);
+        write_control_register(MIREGADR, address & 0x1F);
+        set_control_register(MICMD, MICMD_MIIRD);
+        wait_busy();
+        clear_control_register(MICMD, MICMD_MIIRD);
+        int read = read_control_register_word(MIRDL);
+        pop_bank();
+        return read;
+}
+
+void write_phy_reg(int address, int data) {
+        push_bank(2);
+        write_control_register(MIREGADR, address & 0x1F);
+        write_control_register(MIWRL, data);
+        write_control_register(MIWRH, data >> 8);
+        pop_bank();
+        wait_busy();
 }
 
 int drop_root() {

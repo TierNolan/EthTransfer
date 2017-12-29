@@ -1,6 +1,8 @@
 #ifndef ETH_DRIVER_LOCAL_H
 #define ETH_DRIVER_LOCAL_H
 
+#include "eth_driver.h"
+
 // Global
 
 #define EIE (0x1B)
@@ -171,19 +173,15 @@
 
 #define TX_SIZE (0x0C00)
 #define MEM_HIGH (0x1FFF)
+#define RX_END (MEM_HIGH - TX_SIZE)
+#define TX_START (RX_END + 1)
+#define TX_BANK2 (TX_START + (TX_SIZE / 2))
 
-void write_register_word(int address, int data);
-int read_register_word(int address);
-void set_bank(int bank);
-
-void set_read_pointer(int address);
-void set_write_pointer(int address);
 void set_rx_range(int start, int end);
 
 void set_receive_enable(int receive);
 
-int read_phy_reg(int address);
-void write_phy_reg(int address, int data);
-
+void ntoh_eth(eth_packet* packet);
+void hton_eth(eth_packet* packet);
 
 #endif
