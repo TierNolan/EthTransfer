@@ -1,4 +1,4 @@
-# PiSafeTransfer
+# EthTransfer
 ## File transfer over ethernet for Raspberry Pi with ENC28J60 controlled by GPIO
 
 The ENC28J60 is a basic ethernet board that can be controlled via the GPIO pins from the Raspberry Pi.
