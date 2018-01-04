@@ -226,7 +226,6 @@ void set_bank(int bank) {
 void push_bank(int bank) {
 	if (bank_index >= BANK_STACK_SIZE) {
 		fprintf(stderr, "Bank stack exhausted\n");
-		fflush(stderr);
 		exit(-1);
 	} 
 	bank_stack[bank_index] = current_bank;
@@ -237,7 +236,6 @@ void push_bank(int bank) {
 void pop_bank() {
 	if (bank_index <= 0) {
 		fprintf(stderr, "Bank stack underflow\n");
-		fflush(stderr);
 		exit(-1);
 	}
 	bank_index--;

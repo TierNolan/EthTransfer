@@ -46,12 +46,49 @@ int init_ethernet() {
 	}
 
         srand(time(NULL));
-        int j;
-        for (j = 0; j < sizeof(mac_address.mac); j++) {
-                mac_address.mac[j] = rand();
+
+	FILE *fp = fopen("eth_mac.txt", "r");
+
+	if (fp != NULL) {
+                int a, b, c, d, e, f;
+                int fields = fscanf(fp, "%02x:%02x:%02x:%02x:%02x:%02x", &a, &b, &c, &d, &e, &f);
+		fclose(fp);
+
+                if (fields == 6) {
+                        mac_address.mac[0] = a;
+                        mac_address.mac[1] = b;
+                        mac_address.mac[2] = c;
+                        mac_address.mac[3] = d;
+                        mac_address.mac[4] = e;
+                        mac_address.mac[5] = f;
+                } else {
+			printf("Failed to read MAC address from file\n");
+			fp = NULL;
+		}
         }
-	mac_address.mac[0] &= 0xFE; // Unicast address
-        mac_address.mac[0] |= 0x02; // Local MAC address (not globally unique)
+
+
+	if (fp == NULL) {
+                printf("No ethernet address found, creating\n");
+
+        	int j;
+        	for (j = 0; j < sizeof(mac_address.mac); j++) {
+                	mac_address.mac[j] = rand();
+        	}
+		mac_address.mac[0] &= 0xFE; // Unicast address
+        	mac_address.mac[0] |= 0x02; // Local MAC address (not globally unique)
+
+		fp = fopen("eth_mac.txt", "w");
+
+		if (fp == NULL) {
+			printf("Unable to save to eth_mac.txt file\n");
+		} else {
+			for (j = 0; j < sizeof(mac_address.mac); j++) {
+				fprintf(fp, "%s%02x", j == 0 ? "" : ":", mac_address.mac[j]);
+			}
+			fclose(fp);
+		}
+	}
 
 	// NOTE: read range must start at location 0 due to HW bug
 	// See:  ENC28J60 Rev. B7 Silicon Errata   (Section 3)
@@ -160,25 +197,28 @@ int send_packet(eth_packet* packet) {
 
 	hton_eth(packet);
 
-	set_write_pointer(0);
+	set_write_pointer(TX_START);
 	char control_prefix[1];
 	control_prefix[0] = 0x0E;
 	buffer_write(control_prefix, 0, 1);
 	buffer_write(packet->buffer, 0, length);
 
-	ntoh_eth(packet);
+	hton_eth(packet);
 
 	push_bank(0);
-	write_control_register_word(ETXSTL, 0);
-	write_control_register_word(ETXNDL, length);
+	write_control_register_word(ETXSTL, TX_START);
+	write_control_register_word(ETXNDL, TX_START + length);
 	pop_bank();
 
 	set_control_register(ECON1, ECON1_TXRTS);
 
 	usleep(1);
 
-	while (read_control_register(ECON1) & ECON1_TXRTS)
-		;
+	while (read_control_register(ECON1) & ECON1_TXRTS) {
+		usleep(1);
+	}
+
+	usleep(1000);
 
 	return 1;
 }

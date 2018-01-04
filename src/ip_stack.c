@@ -19,25 +19,33 @@ uint16_t identification_counter;
 int connection_counter;
 tcp_connection tcp_conn;
 
-int init_ip() {
+int init_ip(uint32_t addr) {
 	if (!init_ethernet()) {
 		return 0;
 	}
-	ip_addr = pack_ip_addr(192, 168, 0, 50);
+	ip_addr = addr;
 	identification_counter = rand();
 	connection_counter = 1;
 	tcp_conn.state = TCP_LISTEN;
 	return 1;
 }
 
+int close_ip() {
+	connection_counter = -1;
+	tcp_conn.state = TCP_LISTEN;
+	return close_ethernet();
+}
+
 void ip_stack_poll() {
 	int action_taken = 0;
 
-	while (handle_rx_packet()) {
+	int i = 10;
+	while (handle_rx_packet() && (0 <= i--)) {
 		action_taken = 1;
 	}
 
-	while (send_tcp_packet()) {
+	i = 10;
+	while (send_tcp_packet() && (0 <= i--)) {
 		action_taken = 1;
 	}
 
@@ -362,10 +370,6 @@ void handle_tcp_packet(ip_packet rx_ip_packet) {
 
 	int ihl = rx_ip_packet.ip_header->version_ihl & 0x0F;
 
-	tcp_conn.remote_window = ((uint32_t) rx_ip_packet.tcp_header->window_size) << tcp_conn.remote_window_scale;
-	uint32_t new_limit = base + tcp_conn.remote_window;
-	tcp_conn.tx_limit = new_limit > tcp_conn.tx_limit ? new_limit : tcp_conn.tx_limit;
-
 	int data_length =  rx_ip_packet.ip_header->total_length - 4 * ihl - data_offset;
 
 	if (data_length < 0 || data_length > MAX_SEGMENT) {
@@ -398,6 +402,10 @@ void handle_tcp_packet(ip_packet rx_ip_packet) {
 		}
 		acked = 1;
 	}
+
+        tcp_conn.remote_window = ((uint32_t) rx_ip_packet.tcp_header->window_size) << tcp_conn.remote_window_scale;
+        uint32_t new_limit = tcp_conn.tx_acked + tcp_conn.remote_window;
+        tcp_conn.tx_limit = (new_limit > tcp_conn.tx_limit) ? new_limit : tcp_conn.tx_limit;
 
         if (tcp_conn.state == TCP_SYN_ACK_SENT && acked) {
                 tcp_conn.state = TCP_CONNECTED;
@@ -493,6 +501,7 @@ int send_tcp_packet() {
 	if (timed_out && !send) {
 		send = 1;
 		tcp_conn.tx_sent = tcp_conn.tx_acked;
+		tcp_conn.tx_limit = tcp_conn.tx_acked + tcp_conn.remote_window;
 	} else {
 		timed_out = 0;
 	}
@@ -562,6 +571,8 @@ int send_tcp_packet() {
 		tx_ip_packet.tcp_header->checksum = 0;
 		tx_ip_packet.tcp_header->urgent = 0;
 
+		int window_size =  tx_ip_packet.tcp_header->window_size;
+
 		copy_from_circle_buffer(((uint8_t*) tx_ip_packet.tcp_header) + data_offset, data_length, tcp_conn.tx_buffer, TX_MASK, tcp_conn.tx_sent, data_length);
 
 		tx_packet.length = sizeof(*tx_packet.header) + tx_ip_packet.ip_header->total_length;
@@ -587,10 +598,10 @@ int send_tcp_packet() {
 
         	tx_ip_packet.tcp_header->checksum = htons(ip_checksum_final(tcp_checksum));
 
-        	send_packet(tx_ip_packet.eth_packet);
+       		send_packet(tx_ip_packet.eth_packet);
+                tcp_conn.tx_sent = tcp_conn.tx_sent + data_length;
 
 		tcp_conn.ack_timeout = get_now() + ACK_TIMEOUT;
-		tcp_conn.tx_sent = tcp_conn.tx_sent + data_length;
 
 		if (syn) {
 			tcp_conn.state = TCP_SYN_ACK_SENT;
@@ -623,7 +634,7 @@ int send_tcp_packet() {
                         tcp_conn.ack_timeout = -1;
                 }
 
-		return 1;
+		return data_length > 0;
 	}
 	return 0;
 }
@@ -636,7 +647,11 @@ int open_tcp() {
 	return tcp_conn.connection_id;
 }
 
-int read_tcp(int connection_id, uint8_t* buffer, int len) {
+int read_tcp(int connection_id, uint8_t* buffer, int off, int len) {
+	if (off < 0) {
+		return -1;
+	}
+
 	if (tcp_conn.state == TCP_LISTEN || tcp_conn.connection_id != connection_id) {
 		return -1;
 	}
@@ -656,11 +671,15 @@ int read_tcp(int connection_id, uint8_t* buffer, int len) {
 
 	int data_length = (len < available) ? len : available;
 
-	copy_from_circle_buffer(buffer, len, tcp_conn.rx_buffer, RX_MASK, tcp_conn.rx_read, data_length);
+	if (data_length < 0) {
+		return -1;
+	}
+
+	copy_from_circle_buffer(buffer + off, len, tcp_conn.rx_buffer, RX_MASK, tcp_conn.rx_read, data_length);
 
 	tcp_conn.rx_read += data_length;
 
-	if (data_length > 0 && tcp_conn.rx_window < (TCP_WINDOW / 2)) {
+	if (data_length > 0) {
 		tcp_conn.ack_timeout = -1;
 	}
 
@@ -675,7 +694,10 @@ int write_tcp(int connection_id, uint8_t* buffer, int len) {
 	int off = 0;
 	int written = 0;
 	while (len > 0) {
-		int available = tcp_conn.tx_acked + tcp_conn.remote_window - tcp_conn.tx_write;
+		int window_available = tcp_conn.tx_acked + tcp_conn.remote_window - tcp_conn.tx_write;
+		int buffer_available = BUFFER_SIZE - (tcp_conn.tx_write - tcp_conn.tx_acked);
+
+		int available = (window_available > buffer_available) ? buffer_available : window_available;
 
 		int data_length = (len < available) ? len : available;
 
@@ -684,6 +706,7 @@ int write_tcp(int connection_id, uint8_t* buffer, int len) {
 			tcp_conn.tx_write += data_length;
 			len -= data_length;
 			written += data_length;
+			off += data_length;
 		}
 
 		ip_stack_poll();
@@ -692,7 +715,11 @@ int write_tcp(int connection_id, uint8_t* buffer, int len) {
 	return written;
 }
 
-void close_tcp() {
+void close_tcp(int connection_id) {
+	if (tcp_conn.connection_id != connection_id) {
+		return;
+	}
+
 	tcp_conn.state = TCP_LISTEN;
 }
 
@@ -745,12 +772,23 @@ int check_timeout(long timeout) {
 	return get_now() > timeout;
 }
 
-int pack_ip_addr(int a, int b, int c, int d) {
+int32_t pack_ip_addr(int a, int b, int c, int d) {
         a &= 0xFF;
         b &= 0xFF;
         c &= 0xFF;
         d &= 0xFF;
         return (a << 24) | (b << 16) | (c << 8) | d;
+}
+
+char unpack_buffer[32];
+
+char* unpack_ip_addr(uint32_t ip_addr) {
+	int a = (ip_addr >> 24) & 0xFF;
+	int b = (ip_addr >> 16) & 0xFF;
+	int c = (ip_addr >> 8) & 0xFF;
+	int d = (ip_addr) & 0xFF;
+	sprintf(unpack_buffer, "%d.%d.%d.%d", a, b, c, d);
+	return unpack_buffer;
 }
 
 int scan_options(uint8_t* buf, int len, int kind) {
@@ -806,7 +844,8 @@ uint32_t ip_checksum_add(uint32_t checksum, uint8_t* buf, int len) {
 }
 
 uint32_t ip_checksum_final(uint32_t checksum) {
-        checksum = checksum + (checksum >> 16);
+	checksum = (checksum & 0xFFFF) + (checksum >> 16);
+	checksum = (checksum & 0xFFFF) + (checksum >> 16);
         return (~checksum) & 0xFFFF;
 }
 
@@ -851,77 +890,10 @@ void copy_from_circle_buffer(uint8_t* dest, int dest_size, uint8_t* source, int 
         if (mask_start <= mask_end) {
                 memcpy(dest, source + mask_start, length); 
         } else {
-                int len1 = source_mask + 1 - source_start;
+                int len1 = source_mask + 1 - mask_start;
                 int len2 = length - len1;
+
                 memcpy(dest, source + mask_start, len1);
                 memcpy(dest + len1, source, len2);
         }
-}
-
-
-
-int main() {
-        if (!init_ip()) {
-                fprintf(stderr, "Unable to init ip stack\n");
-                return 1;
-        }
-
-        uint8_t read_buffer[2048];
-
-	int connection_id = -1;
-
-        while (1) {
-                ip_stack_poll();
-
-		if (connection_id == -1) {
-			connection_id = open_tcp();
-		} else {
-			int read = 0;
-
-			while (read >= 0) {
-				read = read_tcp(connection_id, read_buffer, 2048);
-				if (read < 0) {
-					continue;
-				}
-
-				if (read > 0) {
-					printf("Read: (%d) ", read);
-					printf("\n---------------\n");
-					int i;
-					for (i = 0; i < read; i++) {
-						printf("%c", read_buffer[i]);
-					}
-					printf("\n---------------\n");
-				}
-
-				ip_stack_poll();
-			}
-
-			char message[16384];
-
-			char content[16384];
-
-			sprintf(content, "%s\n%s\n%s\n%s\n%s\n%s\n",
-				"<html><head></head><body>",
-				"<form enctype=\"multipart/form-data\" action=\"upload.html\" method=\"POST\">",
-				"Select file to send: <input name=\"uploadfile\" type=\"file\"/><br/>",
-				"<input type=\"submit\" value=\"Upload\" />",
-				"</form>",
-				"</body></html>");
-
-			printf("Content\n%s\n", content);
-
-			sprintf(message, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\nContent-Type: text/html\r\nConnection: closed\r\n\r\n%s", strlen(content), content);
-
-			int len = strlen(message);
-
-			write_tcp(connection_id, message, len);
-
-			shutdown_tcp(connection_id);
-		}
-        }
-
-        close_ip();
-
-        return 0;
 }

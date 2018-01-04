@@ -33,7 +33,7 @@
 #define TCP_SYN (0x02)
 #define TCP_FIN (0x01)
 
-#define ACK_TIMEOUT (200)
+#define ACK_TIMEOUT (20)
 
 typedef struct _tcp_segment {
         uint32_t position;
@@ -163,8 +163,6 @@ int add_segment(uint8_t* data, int data_length, uint32_t dest);
 
 long get_now();
 int check_timeout(long timeout);
-
-int pack_ip_addr(int a, int b, int c, int d);
 
 int scan_options(uint8_t* buf, int len, int kind);
 
